@@ -145,6 +145,7 @@ func TestValidate(t *testing.T) {
 		"segment_index zero":     {modify: func(r *ingestRequest) { r.SegmentIndex = ptr(0) }},
 		"missing asset_id":       {modify: func(r *ingestRequest) { r.AssetID = nil }, want: &fieldError{Field: "asset_id", Missing: true}},
 		"empty asset_id":         {modify: func(r *ingestRequest) { r.AssetID = ptr("") }, want: &fieldError{Field: "asset_id", Missing: true}},
+		"non-canonical asset_id": {modify: func(r *ingestRequest) { r.AssetID = ptr("show//x/ep1") }, want: &fieldError{Field: "asset_id"}},
 		"missing segment_index":  {modify: func(r *ingestRequest) { r.SegmentIndex = nil }, want: &fieldError{Field: "segment_index", Missing: true}},
 		"negative segment_index": {modify: func(r *ingestRequest) { r.SegmentIndex = ptr(-1) }, want: &fieldError{Field: "segment_index"}},
 		"missing cdn_url":        {modify: func(r *ingestRequest) { r.CDNURL = nil }, want: &fieldError{Field: "cdn_url", Missing: true}},
@@ -223,6 +224,32 @@ func TestIsHTTPURL(t *testing.T) {
 			t.Parallel()
 			if got := isHTTPURL(tc.in); got != tc.want {
 				t.Errorf("isHTTPURL(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsCanonicalAssetID(t *testing.T) {
+	t.Parallel()
+	tests := map[string]struct {
+		in   string
+		want bool
+	}{
+		"nested path":      {in: "show/thunderbirds/season/1/ep1", want: true},
+		"single segment":   {in: "ep1", want: true},
+		"dots inside name": {in: "show/v1.2/ep1", want: true},
+		"leading slash":    {in: "/show/ep1", want: false},
+		"trailing slash":   {in: "show/ep1/", want: false},
+		"double slash":     {in: "show//ep1", want: false},
+		"dot segment":      {in: "show/./ep1", want: false},
+		"dot-dot segment":  {in: "show/../ep1", want: false},
+		"only dot-dot":     {in: "..", want: false},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := isCanonicalAssetID(tc.in); got != tc.want {
+				t.Errorf("isCanonicalAssetID(%q) = %v, want %v", tc.in, got, tc.want)
 			}
 		})
 	}
