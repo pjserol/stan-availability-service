@@ -53,7 +53,7 @@ type errorResponse struct {
 	Error string `json:"error"`
 }
 
-// decodeJSON reads exactly one JSON object from a size-limited body into v.
+// decodeJSON reads exactly one JSON value from a size-limited body into v.
 // It returns errBodyTooLarge or errMalformedJSON, wrapping the cause.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))

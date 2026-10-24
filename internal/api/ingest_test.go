@@ -27,24 +27,28 @@ func TestIngest(t *testing.T) {
 		wantStatus int
 		wantBody   string
 		wantStored *store.Segment // checked via the store when non-nil
+		wantAt     time.Time      // received_at the stored segment must carry
 	}{
 		"valid segment": {
-			body:       `{"asset_id":"show/thunderbirds/season/1/ep1","segment_index":4,"cdn_url":"https://cdn.example.com/seg4.ts","received_at":"2024-05-01T10:00:00Z"}`,
+			body:       `{"asset_id":"show/thunderbirds/season/1/ep1","segment_index":4,"cdn_url":"https://cdn.example.com/seg4.ts","received_at":"2024-05-01T10:00:04Z"}`,
 			wantStatus: http.StatusAccepted,
 			wantBody:   accepted,
 			wantStored: &store.Segment{Index: 4, CDNURL: "https://cdn.example.com/seg4.ts"},
+			wantAt:     time.Date(2024, 5, 1, 10, 0, 4, 0, time.UTC),
 		},
 		"segment_index zero is valid": {
 			body:       `{"asset_id":"show/thunderbirds/season/1/ep1","segment_index":0,"cdn_url":"https://cdn.example.com/seg0.ts","received_at":"2024-05-01T10:00:00Z"}`,
 			wantStatus: http.StatusAccepted,
 			wantBody:   accepted,
 			wantStored: &store.Segment{Index: 0, CDNURL: "https://cdn.example.com/seg0.ts"},
+			wantAt:     time.Date(2024, 5, 1, 10, 0, 0, 0, time.UTC),
 		},
 		"unknown fields are ignored": {
-			body:       `{"asset_id":"show/thunderbirds/season/1/ep1","segment_index":1,"cdn_url":"https://cdn.example.com/seg1.ts","received_at":"2024-05-01T10:00:00Z","codec":"h264"}`,
+			body:       `{"asset_id":"show/thunderbirds/season/1/ep1","segment_index":1,"cdn_url":"https://cdn.example.com/seg1.ts","received_at":"2024-05-01T10:00:01Z","codec":"h264"}`,
 			wantStatus: http.StatusAccepted,
 			wantBody:   accepted,
 			wantStored: &store.Segment{Index: 1, CDNURL: "https://cdn.example.com/seg1.ts"},
+			wantAt:     time.Date(2024, 5, 1, 10, 0, 1, 0, time.UTC),
 		},
 		"5a invalid json": {
 			body:       `{ "asset_id": "show/thunderbirds", "segment_index": ]]]`,
@@ -111,6 +115,9 @@ func TestIngest(t *testing.T) {
 			}
 			if len(m.Segments) != 1 || m.Segments[0] != *tc.wantStored {
 				t.Errorf("stored = %+v, want [%+v]", m.Segments, *tc.wantStored)
+			}
+			if !m.LastUpdated.Equal(tc.wantAt) {
+				t.Errorf("stored received_at = %v, want %v", m.LastUpdated, tc.wantAt)
 			}
 		})
 	}
