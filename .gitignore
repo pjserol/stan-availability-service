@@ -2,3 +2,4 @@
 *.out
 *.test
 .DS_Store
+.omc/
