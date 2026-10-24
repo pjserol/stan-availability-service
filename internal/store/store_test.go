@@ -3,7 +3,10 @@ package store
 import (
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -232,16 +235,145 @@ func assertManifest(t *testing.T, got, want Manifest) {
 	}
 }
 
+func TestShardFor(t *testing.T) {
+	t.Parallel()
+	s := New()
+
+	t.Run("same id maps to same shard", func(t *testing.T) {
+		const id = "show/the-walking-dead/season/1/ep1"
+		if s.shardFor(id) != s.shardFor(id) {
+			t.Errorf("shardFor(%q) returned different shards", id)
+		}
+	})
+
+	t.Run("ids spread across shards", func(t *testing.T) {
+		used := make(map[*shard]bool)
+		for i := range 100 {
+			used[s.shardFor(fmt.Sprintf("show/show%d/season/1/ep1", i))] = true
+		}
+		if len(used) < shardCount/2 {
+			t.Errorf("100 ids used %d of %d shards, want at least %d", len(used), shardCount, shardCount/2)
+		}
+	})
+}
+
 func TestStoreConcurrent(t *testing.T) {
-	// TODO: many goroutines Put/Get across many assets; run with -race and
-	// assert every manifest is complete, sorted and duplicate-free.
-	t.Skip("TODO: PR 3")
+	t.Parallel()
+	const (
+		writers  = 8
+		readers  = 4
+		assets   = 50
+		segments = 100
+	)
+	assetID := func(a int) string { return fmt.Sprintf("show/show%d/season/1/ep1", a) }
+	s := New()
+
+	// Readers poll while writers run: a manifest may be incomplete, but must
+	// always be sorted with no duplicate indexes.
+	done := make(chan struct{})
+	var reads atomic.Int64
+	var readersWG sync.WaitGroup
+	for r := range readers {
+		readersWG.Go(func() {
+			rng := rand.New(rand.NewPCG(uint64(writers+r), 0))
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				id := assetID(rng.IntN(assets))
+				m, err := s.Get(id)
+				if errors.Is(err, ErrAssetNotFound) {
+					continue
+				}
+				if err != nil {
+					t.Errorf("Get(%q) unexpected error: %v", id, err)
+					return
+				}
+				reads.Add(1)
+				for i := 1; i < len(m.Segments); i++ {
+					if m.Segments[i].Index <= m.Segments[i-1].Index {
+						t.Errorf("Get(%q) not strictly ascending at %d: %+v", id, i, m.Segments)
+						return
+					}
+				}
+			}
+		})
+	}
+
+	// Every writer sends every segment in its own shuffled order, so each one
+	// arrives out of order and duplicated. Writer 0 starts first but sends the
+	// newest version, so it must win even though older copies tend to arrive later.
+	var writersWG sync.WaitGroup
+	for w := range writers {
+		writersWG.Go(func() {
+			rng := rand.New(rand.NewPCG(uint64(w), 0))
+			for _, i := range rng.Perm(assets * segments) {
+				a, index := i/segments, i%segments
+				s.Put(assetID(a), Segment{index, fmt.Sprintf("w%d/seg%d.ts", w, index)}, at(index).Add(time.Duration(writers-1-w)))
+			}
+		})
+	}
+	writersWG.Wait()
+	close(done)
+	readersWG.Wait()
+	if reads.Load() == 0 {
+		t.Error("readers never observed a manifest during writes")
+	}
+
+	want := Manifest{
+		Segments:    make([]Segment, segments),
+		LastUpdated: at(segments - 1).Add(writers - 1),
+	}
+	for i := range want.Segments {
+		want.Segments[i] = Segment{i, fmt.Sprintf("w0/seg%d.ts", i)}
+	}
+	for a := range assets {
+		want.AssetID = assetID(a)
+		got, err := s.Get(want.AssetID)
+		if err != nil {
+			t.Fatalf("Get(%q) unexpected error: %v", want.AssetID, err)
+		}
+		assertManifest(t, got, want)
+	}
 }
 
 func BenchmarkStorePut(b *testing.B) {
-	b.Skip("TODO: PR 3 — b.RunParallel over many asset IDs")
+	const (
+		assets   = 1_000
+		segments = 1_000
+	)
+	ids := make([]string, assets)
+	for a := range ids {
+		ids[a] = fmt.Sprintf("show/show%d/season/1/ep1", a)
+	}
+	s := New()
+
+	// Each goroutine keeps its own counter, so a shared one doesn't become the bottleneck.
+	var workers atomic.Int64
+	b.RunParallel(func(pb *testing.PB) {
+		offset := int(workers.Add(1))
+		for i := 0; pb.Next(); i++ {
+			index := (i / assets) % segments
+			s.Put(ids[(offset+i)%assets], Segment{Index: index, CDNURL: "seg.ts"}, base.Add(time.Duration(i)))
+		}
+	})
 }
 
 func BenchmarkStoreGet(b *testing.B) {
-	b.Skip("TODO: PR 3 — Get on assets of varying size (10, 1k, 10k segments)")
+	const asset = "show/the-walking-dead/season/1/ep1"
+	for _, n := range []int{10, 1_000, 10_000} {
+		b.Run(fmt.Sprintf("segments=%d", n), func(b *testing.B) {
+			s := New()
+			for _, p := range reverseOrderPuts(asset, n) {
+				s.Put(p.assetID, Segment{Index: p.index, CDNURL: p.cdnURL}, p.receivedAt)
+			}
+			for b.Loop() {
+				if _, err := s.Get(asset); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }
