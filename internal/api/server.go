@@ -35,6 +35,7 @@ func (s *Server) Routes() http.Handler {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
+	// Headers are already sent, so an encode error can't change the response.
 	_ = json.NewEncoder(w).Encode(v)
 }
 
