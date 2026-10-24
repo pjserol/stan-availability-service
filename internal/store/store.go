@@ -13,7 +13,7 @@ import (
 // ErrAssetNotFound is returned when no segment has been ingested for an asset.
 var ErrAssetNotFound = errors.New("asset not found")
 
-// shardCount is a power of two, so the shard index is a cheap bitmask of the hash.
+// shardCount is a power of two, so `% shardCount` compiles to a cheap bitmask.
 const shardCount = 64
 
 // Segment is a single playable segment of an asset.

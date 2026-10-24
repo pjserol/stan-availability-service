@@ -271,6 +271,7 @@ func TestStoreConcurrent(t *testing.T) {
 	// Readers poll while writers run: a manifest may be incomplete, but must
 	// always be sorted with no duplicate indexes.
 	done := make(chan struct{})
+	var reads atomic.Int64
 	var readersWG sync.WaitGroup
 	for r := range readers {
 		readersWG.Go(func() {
@@ -290,6 +291,7 @@ func TestStoreConcurrent(t *testing.T) {
 					t.Errorf("Get(%q) unexpected error: %v", id, err)
 					return
 				}
+				reads.Add(1)
 				for i := 1; i < len(m.Segments); i++ {
 					if m.Segments[i].Index <= m.Segments[i-1].Index {
 						t.Errorf("Get(%q) not strictly ascending at %d: %+v", id, i, m.Segments)
@@ -301,22 +303,32 @@ func TestStoreConcurrent(t *testing.T) {
 	}
 
 	// Every writer sends every segment in its own shuffled order, so each one
-	// arrives out of order and is duplicated across writers.
+	// arrives out of order and duplicated. Writer 0 starts first but sends the
+	// newest version, so it must win even though older copies tend to arrive later.
 	var writersWG sync.WaitGroup
 	for w := range writers {
 		writersWG.Go(func() {
 			rng := rand.New(rand.NewPCG(uint64(w), 0))
 			for _, i := range rng.Perm(assets * segments) {
 				a, index := i/segments, i%segments
-				s.Put(assetID(a), Segment{index, fmt.Sprintf("seg%d.ts", index)}, at(index))
+				s.Put(assetID(a), Segment{index, fmt.Sprintf("w%d/seg%d.ts", w, index)}, at(index).Add(time.Duration(writers-1-w)))
 			}
 		})
 	}
 	writersWG.Wait()
 	close(done)
 	readersWG.Wait()
+	if reads.Load() == 0 {
+		t.Error("readers never observed a manifest during writes")
+	}
 
-	want := Manifest{Segments: sequentialSegments(segments), LastUpdated: at(segments - 1)}
+	want := Manifest{
+		Segments:    make([]Segment, segments),
+		LastUpdated: at(segments - 1).Add(writers - 1),
+	}
+	for i := range want.Segments {
+		want.Segments[i] = Segment{i, fmt.Sprintf("w0/seg%d.ts", i)}
+	}
 	for a := range assets {
 		want.AssetID = assetID(a)
 		got, err := s.Get(want.AssetID)
@@ -343,7 +355,7 @@ func BenchmarkStorePut(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		offset := int(workers.Add(1))
 		for i := 0; pb.Next(); i++ {
-			index := i % segments
+			index := (i / assets) % segments
 			s.Put(ids[(offset+i)%assets], Segment{Index: index, CDNURL: "seg.ts"}, base.Add(time.Duration(i)))
 		}
 	})
