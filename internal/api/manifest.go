@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -20,12 +21,15 @@ type segmentResponse struct {
 }
 
 func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
-	m, err := s.store.Get(r.PathValue("asset_id"))
+	assetID := r.PathValue("asset_id")
+	m, err := s.store.Get(assetID)
 	switch {
 	case errors.Is(err, store.ErrAssetNotFound):
 		writeError(w, http.StatusNotFound, "asset not found")
 		return
 	case err != nil:
+		s.logger.ErrorContext(r.Context(), "manifest lookup failed",
+			slog.String("asset_id", assetID), slog.Any("error", err))
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}

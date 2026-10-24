@@ -120,6 +120,23 @@ func TestManifest(t *testing.T) {
 			wantStatus: http.StatusNotFound,
 			wantBody:   `{"error":"asset not found"}` + "\n",
 		},
+		"empty asset id": {
+			get:        "",
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error":"asset not found"}` + "\n",
+		},
+		"trailing slash is a different asset": {
+			ingest:     []string{ingestJSON(tb1, 0, u(tbURL, 0), "2024-05-01T10:00:00Z")},
+			get:        tb1 + "/",
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error":"asset not found"}` + "\n",
+		},
+		"encoded slashes resolve to the asset": {
+			ingest:     []string{ingestJSON(tb1, 0, u(tbURL, 0), "2024-05-01T10:00:00Z")},
+			get:        "show%2Fthunderbirds%2Fseason%2F1%2Fep1",
+			wantStatus: http.StatusOK,
+			wantBody:   manifestJSON(tb1, "2024-05-01T10:00:00Z", u(tbURL, 0)),
+		},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/url"
+	"path"
 	"time"
 
 	"github.com/pjserol/stan-availability-service/internal/store"
@@ -54,6 +55,8 @@ func (req ingestRequest) validate() error {
 	switch {
 	case req.AssetID == nil || *req.AssetID == "":
 		return &fieldError{Field: "asset_id", Missing: true}
+	case !isCanonicalAssetID(*req.AssetID):
+		return &fieldError{Field: "asset_id"}
 	case req.SegmentIndex == nil:
 		return &fieldError{Field: "segment_index", Missing: true}
 	case *req.SegmentIndex < 0:
@@ -66,6 +69,12 @@ func (req ingestRequest) validate() error {
 		return &fieldError{Field: "received_at", Missing: true}
 	}
 	return nil
+}
+
+// isCanonicalAssetID rejects IDs the router would rewrite (leading or trailing
+// "/", "//", "." or ".." segments): they could be stored but never fetched.
+func isCanonicalAssetID(id string) bool {
+	return path.Clean("/"+id) == "/"+id
 }
 
 // isHTTPURL reports whether s is an absolute http(s) URL the CDN can fetch.
