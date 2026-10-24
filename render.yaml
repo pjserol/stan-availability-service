@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: stan-availability-service
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: SHUTDOWN_TIMEOUT
+        value: 15s
