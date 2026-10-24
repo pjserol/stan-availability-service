@@ -4,6 +4,7 @@ package store
 import (
 	"cmp"
 	"errors"
+	"hash/fnv"
 	"slices"
 	"sync"
 	"time"
@@ -11,6 +12,9 @@ import (
 
 // ErrAssetNotFound is returned when no segment has been ingested for an asset.
 var ErrAssetNotFound = errors.New("asset not found")
+
+// shardCount is a power of two, so the shard index is a cheap bitmask of the hash.
+const shardCount = 64
 
 // Segment is a single playable segment of an asset.
 type Segment struct {
@@ -31,30 +35,46 @@ type storedSegment struct {
 	receivedAt time.Time
 }
 
-// Store is a concurrency-safe in-memory segment store.
-//
-// TODO: replace the single lock with N shards (FNV-1a hash of the asset ID),
-// each with its own lock, so unrelated assets don't contend.
-type Store struct {
+// shard owns a subset of assets, chosen by hash, under its own lock.
+type shard struct {
 	mu     sync.RWMutex
 	assets map[string]map[int]storedSegment
 }
 
+// Store is a concurrency-safe in-memory segment store. Assets are spread across
+// shards by hash, each with its own lock, so unrelated assets don't contend.
+type Store struct {
+	shards [shardCount]shard
+}
+
 // New returns an empty Store.
 func New() *Store {
-	return &Store{assets: make(map[string]map[int]storedSegment)}
+	s := &Store{}
+	for i := range s.shards {
+		s.shards[i].assets = make(map[string]map[int]storedSegment)
+	}
+
+	return s
+}
+
+// shardFor returns the shard that owns assetID; the same ID always maps to the same shard.
+func (s *Store) shardFor(assetID string) *shard {
+	h := fnv.New32a()
+	h.Write([]byte(assetID))
+	return &s.shards[h.Sum32()%shardCount]
 }
 
 // Put records a segment. A duplicate (same asset and index) replaces the stored
 // one only if its receivedAt is newer; equal or older duplicates are ignored.
 func (s *Store) Put(assetID string, seg Segment, receivedAt time.Time) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	sh := s.shardFor(assetID)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
 
-	segments := s.assets[assetID]
+	segments := sh.assets[assetID]
 	if segments == nil {
 		segments = make(map[int]storedSegment)
-		s.assets[assetID] = segments
+		sh.assets[assetID] = segments
 	}
 	existing, exists := segments[seg.Index]
 	if !exists || receivedAt.After(existing.receivedAt) {
@@ -68,30 +88,34 @@ func (s *Store) Put(assetID string, seg Segment, receivedAt time.Time) {
 // Get returns a sorted copy of an asset's manifest, or ErrAssetNotFound.
 // LastUpdated is the latest receivedAt among the asset's stored segments.
 func (s *Store) Get(assetID string) (Manifest, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	segments, ok := s.assets[assetID]
+	m, ok := s.shardFor(assetID).snapshot(assetID)
 	if !ok {
 		return Manifest{}, ErrAssetNotFound
 	}
 
-	var lastUpdated time.Time
-	out := make([]Segment, 0, len(segments))
-	for _, stored := range segments {
-		out = append(out, stored.segment)
-		if stored.receivedAt.After(lastUpdated) {
-			lastUpdated = stored.receivedAt
-		}
-	}
-
-	slices.SortFunc(out, func(a, b Segment) int {
+	slices.SortFunc(m.Segments, func(a, b Segment) int {
 		return cmp.Compare(a.Index, b.Index)
 	})
+	return m, nil
+}
 
-	return Manifest{
-		AssetID:     assetID,
-		Segments:    out,
-		LastUpdated: lastUpdated,
-	}, nil
+// snapshot copies an asset's manifest under the read lock. Segments are
+// unsorted, so callers can sort the copy without holding the lock.
+func (sh *shard) snapshot(assetID string) (Manifest, bool) {
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+
+	segments, ok := sh.assets[assetID]
+	if !ok {
+		return Manifest{}, false
+	}
+
+	m := Manifest{AssetID: assetID, Segments: make([]Segment, 0, len(segments))}
+	for _, stored := range segments {
+		m.Segments = append(m.Segments, stored.segment)
+		if stored.receivedAt.After(m.LastUpdated) {
+			m.LastUpdated = stored.receivedAt
+		}
+	}
+	return m, true
 }
