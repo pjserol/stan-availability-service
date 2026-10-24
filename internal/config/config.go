@@ -1,7 +1,26 @@
 // Package config loads service configuration from the environment.
 package config
 
-import "time"
+import (
+	"errors"
+	"fmt"
+	"os"
+	"strconv"
+	"time"
+)
+
+const (
+	envPort            = "PORT"
+	envShutdownTimeout = "SHUTDOWN_TIMEOUT"
+
+	defaultPort            = "8080"
+	defaultShutdownTimeout = 15 * time.Second
+)
+
+var (
+	ErrInvalidPort            = errors.New("invalid " + envPort)
+	ErrInvalidShutdownTimeout = errors.New("invalid " + envShutdownTimeout)
+)
 
 // Config holds runtime settings.
 type Config struct {
@@ -9,9 +28,43 @@ type Config struct {
 	ShutdownTimeout time.Duration
 }
 
-// Load reads configuration from environment variables with defaults.
+// Load reads configuration from environment variables, falling back to
+// defaults for unset or empty values and failing fast on invalid ones.
 func Load() (Config, error) {
-	// TODO: read PORT (Render sets it; default "8080") and SHUTDOWN_TIMEOUT
-	// (time.ParseDuration; default 15s). Wrap parse errors with %w.
-	return Config{Port: "8080", ShutdownTimeout: 15 * time.Second}, nil
+	port, err := parsePort(os.Getenv(envPort))
+	if err != nil {
+		return Config{}, err
+	}
+
+	shutdownTimeout, err := parseShutdownTimeout(os.Getenv(envShutdownTimeout))
+	if err != nil {
+		return Config{}, err
+	}
+
+	return Config{Port: port, ShutdownTimeout: shutdownTimeout}, nil
+}
+
+func parsePort(v string) (string, error) {
+	if v == "" {
+		return defaultPort, nil
+	}
+	port, err := strconv.Atoi(v)
+	if err != nil || port < 1 || port > 65535 {
+		return "", fmt.Errorf("%w %q: must be 1-65535", ErrInvalidPort, v)
+	}
+	return v, nil
+}
+
+func parseShutdownTimeout(v string) (time.Duration, error) {
+	if v == "" {
+		return defaultShutdownTimeout, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("%w %q: %w", ErrInvalidShutdownTimeout, v, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("%w %q: must be positive", ErrInvalidShutdownTimeout, v)
+	}
+	return d, nil
 }
