@@ -98,6 +98,52 @@ internal/api/     HTTP handlers, JSON helpers, request logging middleware
 scripts/smoke.sh  end-to-end check against a running instance
 ```
 
+## Architecture
+
+```mermaid
+flowchart TB
+    T["Transcoder"] -- "POST /ingest" --> MW
+    C["CDN origin"] -- "GET /manifest/asset_id" --> MW
+    P["Health check"] -- "GET /health" --> MW
+
+    subgraph svc["stan-availability-service"]
+        MW["Logging middleware<br/>one log line per request"] --> H["Handlers<br/>ingest · manifest · health"]
+        H -- "Put / Get" --> R
+        subgraph store["In-memory store: 64 shards"]
+            R["Pick the asset's shard<br/>FNV-1a hash of asset_id, mod 64"]
+            R --> S0["Shard 0<br/>its own lock<br/>+ its assets' segments"]
+            R --> S1["Shard 1<br/>its own lock<br/>+ its assets' segments"]
+            R --> SN["… Shard 63<br/>its own lock<br/>+ its assets' segments"]
+        end
+    end
+```
+
+Each shard maps `asset_id → segment_index → {segment, received_at}`. Requests for different assets usually land on different shards and never wait for each other.
+
+```mermaid
+sequenceDiagram
+    participant T as Transcoder
+    participant C as CDN origin
+    participant H as Handler
+    participant S as Asset's shard
+
+    T->>H: POST /ingest
+    H->>H: decode (1 MB cap) and validate, else 400 / 413
+    H->>S: take the shard's write lock
+    S->>S: store segment if new, or newer received_at
+    H->>S: release the lock
+    H-->>T: 202 accepted
+
+    C->>H: GET /manifest/asset_id
+    H->>S: take the shard's read lock (shared)
+    S->>S: copy segments and latest received_at, else 404
+    H->>S: release the lock
+    H->>H: sort the copy by index, outside the lock
+    H-->>C: 200 manifest
+```
+
+On SIGTERM the server stops accepting connections, drains in-flight requests for up to `SHUTDOWN_TIMEOUT`, then exits.
+
 ## API
 
 ### `POST /ingest`
