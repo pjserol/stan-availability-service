@@ -3,7 +3,10 @@ services:
     name: stan-availability-service
     runtime: docker
     plan: free
+    region: singapore # closest Render region to Australia
+    branch: main # every merge to main redeploys
     healthCheckPath: /health
     envVars:
+      # Render sets PORT itself. Keep the drain below Render's ~30s shutdown grace period.
       - key: SHUTDOWN_TIMEOUT
         value: 15s
