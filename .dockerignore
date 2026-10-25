@@ -1,0 +1,9 @@
+# Only Go sources and go.mod are needed to build the image.
+.git
+.github
+.claude
+.omc
+*.md
+bin/
+*.out
+*.test
