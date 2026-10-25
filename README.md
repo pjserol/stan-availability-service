@@ -214,10 +214,6 @@ Other decisions (duplicate handling by `received_at`, event-time `last_updated` 
 - **The store takes no `context.Context`.** Its operations are in-memory and take microseconds, so there is nothing to cancel. Contexts carry shutdown (signal → drain deadline) and request-scoped logging.
 - **`/ingest` is trusted.** It is called by the internal transcoder, so there is no authentication or rate limiting.
 
-## Notes on the spec
-
-Error messages are returned exactly as specified, since clients and tests may match them verbatim. The spec mixes styles (*"Could not decode request: …"* vs *"missing required field: …"* and *"asset not found"*). In a production API I'd standardise on one convention and add a stable machine-readable code, for example RFC 9457 Problem Details with a `type` field, so clients never depend on human-readable text. All errors go through a single `writeError` function, so that change would be made in one place.
-
 ## Scenario 7: high-volume burst
 
 *200 goroutines posting segments for 500 assets while 50 goroutines poll random manifests.*
