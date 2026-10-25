@@ -85,8 +85,8 @@ scripts/smoke.sh https://stan-availability-service.onrender.com
 
 | Benchmark | Result |
 | --- | --- |
-| `GET` manifest of 10 / 1,000 / 10,000 segments | 0.27 µs / 58 µs / 0.74 ms, 1 allocation each |
-| Parallel `Put` across 1,000 assets, 11 cores | 39 ns/op (~25M writes/s) |
+| `GET` manifest of 10 / 1,000 / 10,000 segments | ≈0.27 µs / ≈60 µs / ≈0.8 ms, 1 allocation each |
+| Parallel `Put` across 1,000 assets, 11 cores | ≈40 ns/op (~25M writes/s) |
 
 ## Project layout
 
@@ -182,7 +182,7 @@ Returns the asset's segments sorted by index. Asset IDs may contain slashes.
 
 ### Errors
 
-All errors are JSON: `{"error":"<message>"}`.
+API errors are JSON: `{"error":"<message>"}`. Unknown routes and wrong methods get the router's default plain-text `404` and `405`.
 
 | Status | Message | When |
 | --- | --- | --- |
@@ -222,10 +222,10 @@ Error messages are returned exactly as specified, since clients and tests may ma
 
 ### Where it breaks first
 
-The store is not the first bottleneck. Benchmarks put a `Put` at about 39 ns with 11 cores (around 25M writes/s), and 500 assets spread over 64 shards is about 8 assets per shard, with locks held only for a map write or a copy. In order of what fails first:
+The store is not the first bottleneck. Benchmarks put a `Put` at about 40 ns with 11 cores (around 25M writes/s), and 500 assets spread over 64 shards is about 8 assets per shard, with locks held only for a map write or a copy. In order of what fails first:
 
 1. **CPU in the HTTP layer.** JSON decoding and encoding, TLS and connection handling cost far more per request than the store. On a small instance (Render's free tier has a fraction of a CPU), latency climbs here first.
-2. **Manifest reads on long assets.** Each `GET` copies and sorts every segment of the asset: about 0.74 ms at 10,000 segments, repeated on every poll. Hot or long live assets make this, and its allocations and GC pressure, the main cost.
+2. **Manifest reads on long assets.** Each `GET` copies and sorts every segment of the asset: about 0.8 ms at 10,000 segments, repeated on every poll. Hot or long live assets make this, and its allocations and GC pressure, the main cost.
 3. **Memory.** Nothing is ever evicted, so a long-running instance grows with every asset and segment until it runs out of memory.
 4. **A single hot asset.** All of its traffic lands on one shard; sharding spreads different assets, not one.
 
@@ -253,7 +253,7 @@ The store is not the first bottleneck. Benchmarks put a `Put` at about 39 ns wit
 - **In-memory, single instance.** Every restart, redeploy or free-tier sleep starts empty, and there is no replication. A shared store would fix both (see Scenario 7).
 - **No eviction.** Memory grows with every asset and segment; finished assets should expire.
 - **Gaps are not flagged.** A manifest can be `[0, 1, 2, 4]` while segment 3 is in flight, and a player may stall at the gap. Options: return only the contiguous prefix, or report missing indexes.
-- **Reads sort on every request.** Fine for normal assets (58 µs at 1,000 segments); a hot or very long asset would benefit from the cached snapshot described in Scenario 7.
+- **Reads sort on every request.** Fine for normal assets (≈60 µs at 1,000 segments); a hot or very long asset would benefit from the cached snapshot described in Scenario 7.
 - **`/ingest` has no authentication or rate limiting**, on the assumption that only the internal transcoder calls it.
 - **Panics are recovered by `net/http`, not by the service.** A panicking handler drops the connection, and its stack trace goes to stderr unstructured. A recovery middleware returning `500` was considered and left out to keep the middleware simple.
 - **Limited observability.** One structured log line per request, but no metrics, tracing or request IDs, and logs don't identify the instance.
