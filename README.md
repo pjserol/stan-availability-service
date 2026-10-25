@@ -259,3 +259,25 @@ The store is not the first bottleneck. Benchmarks put a `Put` at about 39 ns wit
 - **Limited observability.** One structured log line per request, but no metrics, tracing or request IDs, and logs don't identify the instance.
 - **`received_at` is trusted.** A transcoder with a skewed clock would skew `last_updated` and the newest-wins rule.
 - **Free-tier hosting.** The first request after ~15 minutes idle can take up to a minute.
+
+## Production readiness: what I'd add next
+
+Beyond scaling (Scenario 7) and the gaps above, these are the engineering practices I'd put in place before running this in production with a team.
+
+**Contract**
+- **API spec first.** An OpenAPI 3.1 file becomes the source of truth: server interfaces and types generated from it (e.g. `oapi-codegen`), clients generated for the transcoder and CDN teams, docs published from the same file, and CI failing if the code drifts from the contract. Errors move to RFC 9457 Problem Details.
+
+**Delivery**
+- **Per-environment configuration.** Staging and production values live in the deployment platform (one `render.yaml` or Helm values file per environment), secrets in a secret manager, and a committed `.env.example` documents the variables for local development.
+- **A CD pipeline with a promotion gate.** Images tagged by commit SHA deploy to staging first; the end-to-end suite (`scripts/smoke.sh`) runs against it, and only a green run promotes to production. Rollback is a redeploy of the previous image.
+- **Supply-chain checks in CI:** `golangci-lint`, `govulncheck`, automated dependency updates and container image scanning.
+
+**Quality**
+- **Libraries where they pay off.** Standard library only was a constraint of this challenge, not a production goal: well-maintained libraries for configuration, metrics and tracing (OpenTelemetry) save time and bugs.
+- **Scheduled load tests** reproducing the Scenario 7 traffic, so performance regressions are caught before release.
+
+**Team and operations**
+- **AI skills for conventions and onboarding.** Commit agent instructions and skills that encode how this codebase is written (table-driven tests with sentinel errors, logging, API design, PR descriptions), so new developers and AI assistants follow the same patterns from day one.
+- **Architecture Decision Records.** The decisions behind this service (sharding, newest-wins duplicates, event-time `last_updated`, drain semantics) recorded next to the code, so the reasoning survives team changes.
+- **SLOs, alerts and runbooks.** Targets such as manifest p99 latency and availability, alerts tied to them, and a short on-call runbook.
+- **Service-to-service authentication and rate limiting on `/ingest`** (mTLS or signed tokens), instead of assuming an internal caller.
