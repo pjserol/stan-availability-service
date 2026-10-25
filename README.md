@@ -224,12 +224,12 @@ Error messages are returned exactly as specified, since clients and tests may ma
 
 ### Where it breaks first
 
-The store is not the first bottleneck. Benchmarks put a `Put` at about 40 ns with 11 cores (around 25M writes/s), and 500 assets spread over 64 shards is about 8 assets per shard, with locks held only for a map write or a copy. In order of what fails first:
+I measured the store: a write takes about 40 ns, and with 64 shards the 500 assets rarely compete for the same lock, so the store should not be the first bottleneck. I haven't load-tested the full HTTP path, so the order below is my expectation; I'd confirm it with a load test of this exact traffic and a CPU profile.
 
-1. **CPU in the HTTP layer.** JSON decoding and encoding, TLS and connection handling cost far more per request than the store. On a small instance (Render's free tier has a fraction of a CPU), latency climbs here first.
-2. **Manifest reads on long assets.** Each `GET` copies and sorts every segment of the asset: about 0.8 ms at 10,000 segments, repeated on every poll. Hot or long live assets make this, and its allocations and GC pressure, the main cost.
-3. **Memory.** Nothing is ever evicted, so a long-running instance grows with every asset and segment until it runs out of memory.
-4. **A single hot asset.** All of its traffic lands on one shard; sharding spreads different assets, not one.
+1. **CPU in the HTTP layer** (likely first): parsing requests, JSON decoding and encoding, and the per-request log line cost far more than the store; request logs already show about 0.05–0.25 ms per request against about 40 ns in the store.
+2. **Reading long manifests:** every `GET` copies and sorts all segments (about 0.8 ms at 10,000 segments), on every poll.
+3. **Memory:** nothing is evicted, so it keeps growing.
+4. **One very popular asset:** all its traffic goes to the same shard.
 
 ### What I would change
 
