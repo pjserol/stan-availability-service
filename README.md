@@ -251,16 +251,16 @@ I measured the store: a write takes about 40 ns, and with 64 shards the 500 asse
 
 ## Known limitations
 
-- **`last_updated` is not a change detector.** It is the newest `received_at`, so a late segment with an older timestamp changes the manifest without advancing it (for example, segment 3 arriving after segment 4). Clients shouldn't skip reprocessing just because `last_updated` is unchanged. Production fix: an `ETag` or per-asset version that changes on every write, with `If-None-Match` → `304 Not Modified` for pollers.
-- **In-memory, single instance.** Every restart, redeploy or free-tier sleep starts empty, and there is no replication. A shared store would fix both (see Scenario 7).
-- **No eviction.** Memory grows with every asset and segment; finished assets should expire.
-- **Gaps are not flagged.** A manifest can be `[0, 1, 2, 4]` while segment 3 is in flight, and a player may stall at the gap. Options: return only the contiguous prefix, or report missing indexes.
-- **Reads sort on every request.** Fine for normal assets (≈60 µs at 1,000 segments); a hot or very long asset would benefit from the cached snapshot described in Scenario 7.
-- **`/ingest` has no authentication or rate limiting**, on the assumption that only the internal transcoder calls it.
-- **Panics are recovered by `net/http`, not by the service.** A panicking handler drops the connection, and its stack trace goes to stderr unstructured. A recovery middleware returning `500` was considered and left out to keep the middleware simple.
-- **Limited observability.** One structured log line per request, but no metrics, tracing or request IDs, and logs don't identify the instance.
-- **`received_at` is trusted.** A transcoder with a skewed clock would skew `last_updated` and the newest-wins rule.
-- **Free-tier hosting.** The first request after ~15 minutes idle can take up to a minute.
+- **`last_updated` can't detect every change:** a late segment with an older `received_at` updates the manifest without moving it. Fix: an `ETag` or version, with `304 Not Modified` for pollers.
+- **In-memory, single instance:** restarts, redeploys and free-tier sleeps start empty. Fix: a shared store.
+- **No eviction:** memory keeps growing; finished assets should expire.
+- **Gaps aren't flagged:** `[0, 1, 2, 4]` is returned while segment 3 is still in flight.
+- **Reads sort on every request:** fine for normal assets; very long or popular ones would need the cached manifest from Scenario 7.
+- **`/ingest` is open:** no authentication or rate limiting, assuming only the internal transcoder calls it.
+- **No panic recovery middleware:** `net/http` recovers panics, but logs them unstructured.
+- **Limited observability:** request logs only; no metrics, tracing or request IDs.
+- **`received_at` is trusted:** a skewed transcoder clock skews `last_updated` and duplicate handling.
+- **Free-tier hosting:** the first request after ~15 minutes idle can take up to a minute.
 
 ## Production readiness: what I'd add next
 
