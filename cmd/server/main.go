@@ -21,6 +21,8 @@ import (
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+	// After the first signal, restore default handling so a second one force-quits.
+	context.AfterFunc(ctx, stop)
 	err := run(ctx, logger)
 	stop()
 	if err != nil {
@@ -52,9 +54,11 @@ func serve(ctx context.Context, ln net.Listener, h http.Handler, drainTimeout ti
 		Handler:           h,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       60 * time.Second,
-		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
+		// WriteTimeout fails slow writes but doesn't stop a running handler,
+		// so a stuck handler still holds the drain until drainTimeout.
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+		ErrorLog:     slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()

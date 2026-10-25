@@ -74,7 +74,13 @@ func TestServeDrainsInFlightRequest(t *testing.T) {
 	<-started                 // the request is in flight
 	cancel()                  // SIGTERM equivalent
 	waitUntilRefused(t, addr) // shutdown has started: new connections are refused
-	close(release)            // let the in-flight request finish
+
+	select {
+	case err := <-result:
+		t.Fatalf("serve returned %v before the in-flight request finished", err)
+	case <-time.After(50 * time.Millisecond): // serve is still draining, as required
+	}
+	close(release) // let the in-flight request finish
 
 	if got := <-responses; got.err != nil || got.body != "done" {
 		t.Fatalf("in-flight request = %q, %v; want %q, nil", got.body, got.err, "done")
@@ -88,7 +94,8 @@ func TestServeDrainTimeout(t *testing.T) {
 	t.Parallel()
 	started, release := make(chan struct{}), make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	addr, cancel, result := startServe(t, blockingHandler(started, release), 100*time.Millisecond)
+	const drainTimeout = 100 * time.Millisecond
+	addr, cancel, result := startServe(t, blockingHandler(started, release), drainTimeout)
 
 	go func() {
 		if resp, err := http.Get("http://" + addr); err == nil {
@@ -97,12 +104,16 @@ func TestServeDrainTimeout(t *testing.T) {
 	}()
 
 	<-started
+	start := time.Now()
 	cancel()
 
 	select {
 	case err := <-result:
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("serve() = %v, want context.DeadlineExceeded", err)
+		}
+		if elapsed := time.Since(start); elapsed < drainTimeout {
+			t.Errorf("serve gave up after %v, want at least the %v drain timeout", elapsed, drainTimeout)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("serve did not return after the drain timeout")
