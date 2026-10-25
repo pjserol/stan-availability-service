@@ -3,7 +3,7 @@
 Go HTTP service between Stan's transcoder and CDN origins: ingests segment
 availability events and serves ordered per-asset manifests.
 
-**Live:** https://stan-availability-service.onrender.com (Render free tier, Singapore).
+**Live:** <https://stan-availability-service.onrender.com> (Render free tier, Singapore).
 The free tier sleeps after ~15 minutes idle: the first request can take up to a minute, and in-memory state resets on wake or redeploy.
 
 ## Getting started
@@ -35,7 +35,7 @@ PORT=9000 SHUTDOWN_TIMEOUT=30s go run ./cmd/server
 ```
 
 | Env var | Default | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | `PORT` | `8080` | Listen port (set by Render) |
 | `SHUTDOWN_TIMEOUT` | `15s` | Drain timeout on SIGTERM (Go duration, e.g. `500ms`, `30s`) |
 
@@ -84,13 +84,13 @@ scripts/smoke.sh https://stan-availability-service.onrender.com
 **Benchmarks** (Apple M3 Pro):
 
 | Benchmark | Result |
-|---|---|
+| --- | --- |
 | `GET` manifest of 10 / 1,000 / 10,000 segments | 0.27 µs / 58 µs / 0.74 ms, 1 allocation each |
 | Parallel `Put` across 1,000 assets, 11 cores | 39 ns/op (~25M writes/s) |
 
 ## Project layout
 
-```
+```text
 cmd/server/       main: config, listener, signal handling, graceful shutdown
 internal/config/  PORT and SHUTDOWN_TIMEOUT from the environment
 internal/store/   sharded in-memory segment store
@@ -185,7 +185,7 @@ Returns the asset's segments sorted by index. Asset IDs may contain slashes.
 All errors are JSON: `{"error":"<message>"}`.
 
 | Status | Message | When |
-|---|---|---|
+| --- | --- | --- |
 | 400 | `Could not decode request: JSON parsing failed` | Invalid JSON, wrong field type, empty body, trailing data |
 | 400 | `missing required field: <name>` | A field is missing, `null` or an empty string |
 | 400 | `invalid field: <name>` | Negative `segment_index`, non-http(s) `cdn_url`, non-canonical `asset_id` |
@@ -264,19 +264,23 @@ The store is not the first bottleneck. Benchmarks put a `Put` at about 39 ns wit
 
 Beyond scaling (Scenario 7) and the gaps above, these are the engineering practices I'd put in place before running this in production with a team.
 
-**Contract**
+### Contract
+
 - **API spec first.** An OpenAPI 3.1 file becomes the source of truth: server interfaces and types generated from it (e.g. `oapi-codegen`), clients generated for the transcoder and CDN teams, docs published from the same file, and CI failing if the code drifts from the contract. Errors move to RFC 9457 Problem Details.
 
-**Delivery**
+### Delivery
+
 - **Per-environment configuration.** Staging and production values live in the deployment platform (one `render.yaml` or Helm values file per environment), secrets in a secret manager, and a committed `.env.example` documents the variables for local development.
 - **A CD pipeline with a promotion gate.** Images tagged by commit SHA deploy to staging first; the end-to-end suite (`scripts/smoke.sh`) runs against it, and only a green run promotes to production. Rollback is a redeploy of the previous image.
 - **Supply-chain checks in CI:** `golangci-lint`, `govulncheck`, automated dependency updates and container image scanning.
 
-**Quality**
+### Quality
+
 - **Libraries where they pay off.** Standard library only was a constraint of this challenge, not a production goal: well-maintained libraries for configuration, metrics and tracing (OpenTelemetry) save time and bugs.
 - **Scheduled load tests** reproducing the Scenario 7 traffic, so performance regressions are caught before release.
 
-**Team and operations**
+### Team and operations
+
 - **AI skills for conventions and onboarding.** Commit agent instructions and skills that encode how this codebase is written (table-driven tests with sentinel errors, logging, API design, PR descriptions), so new developers and AI assistants follow the same patterns from day one.
 - **Architecture Decision Records.** The decisions behind this service (sharding, newest-wins duplicates, event-time `last_updated`, drain semantics) recorded next to the code, so the reasoning survives team changes.
 - **SLOs, alerts and runbooks.** Targets such as manifest p99 latency and availability, alerts tied to them, and a short on-call runbook.

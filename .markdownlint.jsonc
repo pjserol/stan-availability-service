@@ -1,0 +1,5 @@
+{
+  // Prose is soft-wrapped by editors and GitHub; hard-wrapping at 80 columns
+  // only makes every edit a noisy diff.
+  "MD013": false
+}
